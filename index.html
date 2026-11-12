@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BERT 领域分类演示</title>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.16.3/dist/ort.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 700px;
+            width: 100%;
+            padding: 40px;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            font-size: 28px;
+            color: #333;
+            margin-bottom: 8px;
+        }
+        .header p {
+            color: #888;
+            font-size: 14px;
+        }
+        .input-section {
+            margin-bottom: 25px;
+        }
+        .input-section label {
+            display: block;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 10px;
+        }
+        textarea {
+            width: 100%;
+            min-height: 120px;
+            padding: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            font-size: 16px;
+            resize: vertical;
+            transition: border-color 0.3s;
+            font-family: inherit;
+        }
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .btn {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.3s, transform 0.2s;
+        }
+        .btn:hover { opacity: 0.9; transform: translateY(-1px); }
+        .btn:active { transform: translateY(0); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .result-section {
+            margin-top: 30px;
+            display: none;
+        }
+        .result-section.show { display: block; animation: fadeIn 0.5s; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        .result-card {
+            background: #f8f9ff;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 15px;
+        }
+        .result-label {
+            font-size: 14px;
+            color: #888;
+            margin-bottom: 5px;
+        }
+        .result-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #667eea;
+        }
+
+        .confidence-bar {
+            margin-top: 15px;
+        }
+        .confidence-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .confidence-label {
+            width: 100px;
+            font-size: 14px;
+            color: #555;
+            flex-shrink: 0;
+        }
+        .confidence-track {
+            flex: 1;
+            height: 24px;
+            background: #eee;
+            border-radius: 12px;
+            overflow: hidden;
+            position: relative;
+        }
+        .confidence-fill {
+            height: 100%;
+            border-radius: 12px;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            transition: width 0.6s ease-out;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            padding-right: 10px;
+        }
+        .confidence-text {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 12px;
+            color: #333;
+            font-weight: 600;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #667eea;
+        }
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        .status {
+            text-align: center;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        .status.loading { background: #fff3cd; color: #856404; }
+        .status.ready { background: #d4edda; color: #155724; }
+        .status.error { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 BERT 领域分类</h1>
+            <p>输入一段文本，AI 将自动识别其所属领域</p>
+        </div>
+
+        <div id="status" class="status loading">⏳ 模型加载中，请稍候...</div>
+
+        <div class="input-section">
+            <label for="textInput">📝 请输入待分类文本：</label>
+            <textarea id="textInput" placeholder="例如：机器学习是人工智能的一个重要分支，它使计算机能够从数据中学习..."></textarea>
+        </div>
+
+        <button class="btn" id="predictBtn" disabled onclick="predict()">
+            🚀 开始分类
+        </button>
+
+        <div class="loading" id="loadingDiv" style="display:none;">
+            <div class="spinner"></div>
+            正在推理中...
+        </div>
+
+        <div class="result-section" id="resultSection">
+            <div class="result-card">
+                <div class="result-label">预测领域</div>
+                <div class="result-value" id="predictedLabel">--</div>
+            </div>
+            <div class="result-card">
+                <div class="result-label">置信度分布</div>
+                <div class="confidence-bar" id="confidenceBar"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ====== 配置区域 ======
+        const MODEL_URL = "saved/model.onnx";  // ONNX 模型路径
+        const VOCAB_URL = "saved/vocab.txt";    // 词表文件路径
+        // 领域标签（根据你的实际类别修改）
+        const LABELS = ["科技", "体育", "财经", "教育", "娱乐", "政治", "医疗", "其他"];
+        const MAX_LENGTH = 128;
+
+        // ====== 全局变量 ======
+        let session = null;
+        let vocab = {};
+
+        // ====== 初始化：加载模型和词表 ======
+        async function init() {
+            const statusEl = document.getElementById('status');
+            const btn = document.getElementById('predictBtn');
+
+            try {
+                // 加载 ONNX 模型
+                session = await ort.InferenceSession.create(MODEL_URL, {
+                    executionProviders: ['wasm'],
+                    graphOptimizationLevel: 'all'
+                });
+
+                // 加载词表
+                const vocabResp = await fetch(VOCAB_URL);
+                const vocabText = await vocabResp.text();
+                const lines = vocabText.split('\n');
+                for (let i = 0; i < lines.length; i++) {
+                    if (lines[i].trim()) {
+                        vocab[lines[i].trim()] = i;
+                    }
+                }
+
+                statusEl.className = 'status ready';
+                statusEl.textContent = '✅ 模型加载完成，可以开始使用！';
+                btn.disabled = false;
+            } catch (e) {
+                statusEl.className = 'status error';
+                statusEl.textContent = '❌ 模型加载失败：' + e.message;
+                console.error(e);
+            }
+        }
+
+        // ====== 分词（简化版 BERT Tokenizer） ======
+        function tokenize(text) {
+            // 将文本转为字符序列（中文按字分词）
+            let chars = Array.from(text);
+            let tokens = ["[CLS]"];
+
+            for (let char of chars) {
+                if (tokens.length >= MAX_LENGTH - 1) break;
+                let token = vocab[char] !== undefined ? char : "[UNK]";
+                tokens.push(token);
+            }
+            tokens.push("[SEP]");
+
+            // 转为 ID
+            let inputIds = tokens.map(t => vocab[t] !== undefined ? vocab[t] : vocab["[UNK]"]);
+            let attentionMask = new Array(inputIds.length).fill(1);
+            let tokenTypeIds = new Array(inputIds.length).fill(0);
+
+            // Padding
+            while (inputIds.length < MAX_LENGTH) {
+                inputIds.push(0);
+                attentionMask.push(0);
+                tokenTypeIds.push(0);
+            }
+
+            return { inputIds, attentionMask, tokenTypeIds };
+        }
+
+        // ====== Softmax ======
+        function softmax(arr) {
+            const max = Math.max(...arr);
+            const exp = arr.map(x => Math.exp(x - max));
+            const sum = exp.reduce((a, b) => a + b, 0);
+            return exp.map(x => x / sum);
+        }
+
+        // ====== 推理 ======
+        async function predict() {
+            const text = document.getElementById('textInput').value.trim();
+            if (!text) {
+                alert('请输入文本！');
+                return;
+            }
+
+            const loadingDiv = document.getElementById('loadingDiv');
+            const resultSection = document.getElementById('resultSection');
+            const btn = document.getElementById('predictBtn');
+
+            loadingDiv.style.display = 'block';
+            resultSection.classList.remove('show');
+            btn.disabled = true;
+
+            try {
+                // Tokenize
+                const { inputIds, attentionMask, tokenTypeIds } = tokenize(text);
+
+                // 转为 Tensor
+                const inputIdsTensor = new ort.Tensor('int64', BigInt64Array.from(inputIds.map(x => BigInt(x))), [1, MAX_LENGTH]);
+                const attentionMaskTensor = new ort.Tensor('int64', BigInt64Array.from(attentionMask.map(x => BigInt(x))), [1, MAX_LENGTH]);
+                const tokenTypeIdsTensor = new ort.Tensor('int64', BigInt64Array.from(tokenTypeIds.map(x => BigInt(x))), [1, MAX_LENGTH]);
+
+                // 推理
+                const feeds = {
+                    "input_ids": inputIdsTensor,
+                    "attention_mask": attentionMaskTensor,
+                    "token_type_ids": tokenTypeIdsTensor
+                };
+                const output = await session.run(feeds);
+                const logits = output["logits"].data;
+
+                // 后处理
+                const probs = softmax(Array.from(logits));
+                const maxIdx = probs.indexOf(Math.max(...probs));
+                const predictedLabel = LABELS[maxIdx] || `类别 ${maxIdx}`;
+                const confidence = (probs[maxIdx] * 100).toFixed(2);
+
+                // 排序所有类别
+                let sortedProbs = probs
+                    .map((p, i) => ({ label: LABELS[i] || `类别 ${i}`, prob: p }))
+                    .sort((a, b) => b.prob - a.prob);
+
+                // 展示结果
+                document.getElementById('predictedLabel').textContent = `${predictedLabel} (${confidence}%)`;
+
+                // 展示置信度条
+                const barContainer = document.getElementById('confidenceBar');
+                barContainer.innerHTML = '';
+                sortedProbs.slice(0, 5).forEach(item => {
+                    const pct = (item.prob * 100).toFixed(1);
+                    const div = document.createElement('div');
+                    div.className = 'confidence-item';
+                    div.innerHTML = `
+                        <div class="confidence-label">${item.label}</div>
+                        <div class="confidence-track">
+                            <div class="confidence-fill" style="width:${pct}%"></div>
+                            <span class="confidence-text">${pct}%</span>
+                        </div>
+                    `;
+                    barContainer.appendChild(div);
+                });
+
+                resultSection.classList.add('show');
+            } catch (e) {
+                alert('推理出错：' + e.message);
+                console.error(e);
+            } finally {
+                loadingDiv.style.display = 'none';
+                btn.disabled = false;
+            }
+        }
+
+        // ====== 页面加载完成后初始化 ======
+        init();
+    </script>
+</body>
+</html>
